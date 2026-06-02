@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>학교 탈출용 2인용 봄버맨 게임</title>
+    <style>
+        body {
+            background: #1e1e24;
+            color: #fff;
+            font-family: 'Malgun Gothic', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+        h1 { margin: 0 0 10px 0; font-size: 2rem; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+        #status { font-size: 1.4rem; color: #ffeb3b; margin-bottom: 15px; font-weight: bold; height: 30px; }
+        canvas {
+            border: 6px solid #3a3a4a;
+            background: #2d2d3a;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+            border-radius: 4px;
+        }
+        .info-panel {
+            display: flex;
+            gap: 50px;
+            margin-top: 15px;
+            background: #2d2d3a;
+            padding: 10px 30px;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            border: 1px solid #444;
+        }
+        .p1-keys { color: #4CAF50; font-weight: bold; }
+        .p2-keys { color: #FF5722; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h1>💣 1컴퓨터 2인용 봄버맨 🧱</h1>
+    <div id="status">스페이스바를 누르면 게임이 시작됩니다!</div>
+    
+    <canvas id="gameCanvas" width="440" height="440"></canvas>
+    
+    <div class="info-panel">
+        <div class="p1-keys">🟢 플레이어 1 (좌상단): WASD 이동 | Spacebar 폭탄</div>
+        <div class="p2-keys">🔴 플레이어 2 (우하단): 방향키 이동 | Enter 폭탄</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusText = document.getElementById('status');
+
+        const TILE_SIZE = 40;
+        let gameActive = false;
+
+        // 11x11 고정 맵 (1: 벽, 0: 빈 공간)
+        const MAP = [
+            [1,1,1,1,1,1,1,1,1,1,1],
+            [1,0,0,0,0,0,0,0,0,0,1],
+            [1,0,1,0,1,0,1,0,1,0,1],
+            [1,0,0,0,0,0,0,0,0,0,1],
+            [1,0,1,0,1,0,1,0,1,0,1],
+            [1,0,0,0,0,0,0,0,0,0,1],
+            [1,0,1,0,1,0,1,0,1,0,1],
+            [1,0,0,0,0,0,0,0,0,0,1],
+            [1,0,1,0,1,0,1,0,1,0,1],
+            [1,0,0,0,0,0,0,0,0,0,1],
+            [1,1,1,1,1,1,1,1,1,1,1]
+        ];
+
+        let players = {};
+        let bombs = [];
+        let explosions = [];
+
+        // 키 입력 감지 객체
+        const keys = {
+            w: false, a: false, s: false, d: false, ' ': false,
+            ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, Enter: false
+        };
+
+        // 게임 초기화 함수
+        function initGame() {
+            players = {
+                p1: { x: 48, y: 48, color: '#4CAF50', alive: true, name: 'Player 1' },
+                p2: { x: 368, y: 368, color: '#FF5722', alive: true, name: 'Player 2' }
+            };
+            bombs = [];
+            explosions = [];
+            gameActive = true;
+            statusText.innerText = "🔥 서바이벌 매치 시작!! 상대방을 폭사시키세요!";
+            update();
+        }
+
+        // 키보드 이벤트
+        window.addEventListener('keydown', e => {
+            if (e.key in keys) {
+                // 브라우저 스크롤 방지
+                if(["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", " "].includes(e.key)) {
+                    e.preventDefault();
+                }
+                keys[e.key] = true;
+            }
+
+            // 게임 시작 전 스페이스바 누르면 시작
+            if (!gameActive && (e.key === ' ' || e.key === 'Enter')) {
+                initGame();
+            }
+
+            // 폭탄 설치 (다운 키 이벤트에서 1회성 처리)
+            if (gameActive) {
+                if (e.key === ' ' && players.p1.alive) placeBomb('p1');
+                if (e.key === 'Enter' && players.p2.alive) placeBomb('p2');
+            }
+        });
+
+        window.addEventListener('keyup', e => { if (e.key in keys) keys[e.key] = false; });
+
+        // 폭탄 설치 로직
+        function placeBomb(playerId) {
+            const p = players[playerId];
+            const gx = Math.floor((p.x + 12) / TILE_SIZE);
+            const gy = Math.floor((p.y + 12) / TILE_SIZE);
+
+            // 해당 칸에 이미 폭탄이 없는 경우에만 설치
+            if (!bombs.some(b => b.gx === gx && b.gy === gy)) {
+                const bomb = { gx, gy, timer: 180 }; // 약 3초 (60fps * 3)
+                bombs.push(bomb);
+            }
+        }
+
+        // 충돌 검사 (벽과 플레이어 히트박스 비교)
+        function checkCollision(x, y) {
+            const size = 24; // 캐릭터 크기
+            const corners = [
+                {x: x, y: y}, {x: x + size, y: y},
+                {x: x, y: y + size}, {x: x + size, y: y + size}
+            ];
+            for (let c of corners) {
+                const gx = Math.floor(c.x / TILE_SIZE);
+                const gy = Math.floor(c.y / TILE_SIZE);
+                if (MAP[gy] && MAP[gy][gx] === 1) return true;
+            }
+            return false;
+        }
+
+        // 폭발 처리 함수
+        function explode(bomb) {
+            const range = 2; // 폭발 리치 (2칸)
+            const affected = [{x: bomb.gx, y: bomb.gy}];
+            const dirs = [{x:1,y:0}, {x:-1,y:0}, {x:0,y:1}, {x:0,y:-1}];
+
+            dirs.forEach(d => {
+                for(let i = 1; i <= range; i++) {
+                    const tx = bomb.gx + d.x * i;
+                    const ty = bomb.gy + d.y * i;
+                    if (MAP[ty] && MAP[ty][tx] === 1) break; // 벽에 막힘
+                    affected.push({x: tx, y: ty});
+                }
+            });
+
+            // 불길 데이터 등록 (애니메이션 프레임 카운트 추가)
+            affected.forEach(t => {
+                explosions.push({gx: t.x, gy: t.y, timer: 30}); // 0.5초간 노출
+            });
+
+            // 플레이어 대미지 체크
+            Object.values(players).forEach(p => {
+                if (!p.alive) return;
+                const pgx = Math.floor((p.x + 12) / TILE_SIZE);
+                const pgy = Math.floor((p.y + 12) / TILE_SIZE);
+
+                affected.forEach(t => {
+                    if (t.x === pgx && t.y === pgy) {
+                        p.alive = false;
+                    }
+                });
+            });
+        }
+
+        // 실시간 물리 및 상태 업데이트 루프 (초당 60회)
+        function update() {
+            if (!gameActive) return;
+
+            const speed = 3;
+
+            // Player 1 조작 (WASD)
+            if (players.p1.alive) {
+                let nextX = players.p1.x;
+                let nextY = players.p1.y;
+                if (keys.w) nextY -= speed;
+                if (keys.s) nextY += speed;
+                if (keys.a) nextX -= speed;
+                if (keys.d) nextX += speed;
+
+                if (!checkCollision(nextX, players.p1.y)) players.p1.x = nextX;
+                if (!checkCollision(players.p1.x, nextY)) players.p1.y = nextY;
+            }
+
+            // Player 2 조작 (방향키)
+            if (players.p2.alive) {
+                let nextX = players.p2.x;
+                let nextY = players.p2.y;
+                if (keys.ArrowUp) nextY -= speed;
+                if (keys.ArrowDown) nextY += speed;
+                if (keys.ArrowLeft) nextX -= speed;
+                if (keys.ArrowRight) nextX += speed;
+
+                if (!checkCollision(nextX, players.p2.y)) players.p2.x = nextX;
+                if (!checkCollision(players.p2.x, nextY)) players.p2.y = nextY;
+            }
+
+            // 폭탄 타이머 계산
+            bombs.forEach(b => b.timer--);
+            const explodingBombs = bombs.filter(b => b.timer <= 0);
+            explodingBombs.forEach(b => explode(b));
+            bombs = bombs.filter(b => b.timer > 0);
+
+            // 불길 타이머 계산
+            explosions.forEach(e => e.timer--);
+            explosions = explosions.filter(e => e.timer > 0);
+
+            // 승패 조건 확인
+            if (!players.p1.alive && !players.p2.alive) {
+                statusText.innerText = "🤝 무승부! 동귀어complete! (아무키나 눌러 재시작)";
+                gameActive = false;
+            } else if (!players.p1.alive) {
+                statusText.innerText = "🏆 Player 2 (🔴) 승리!! (아무키나 눌러 재시작)";
+                gameActive = false;
+            } else if (!players.p2.alive) {
+                statusText.innerText = "🏆 Player 1 (🟢) 승리!! (아무키나 눌러 재시작)";
+                gameActive = false;
+            }
+
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        // 화면 렌더링 엔진
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. 맵 벽돌 그리기
+            for (let r = 0; r < MAP.length; r++) {
+                for (let c = 0; c < MAP[r].length; c++) {
+                    if (MAP[r][c] === 1) {
+                        ctx.fillStyle = '#4a4a5a';
+                        ctx.fillRect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                        ctx.strokeStyle = '#23232f';
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    }
+                }
+            }
+
+            // 2. 폭탄 그리기
+            bombs.forEach(b => {
+                ctx.fillStyle = '#111';
+                ctx.beginPath();
+                ctx.arc(b.gx * TILE_SIZE + TILE_SIZE/2, b.gy * TILE_SIZE + TILE_SIZE/2, 14, 0, Math.PI*2);
+                ctx.fill();
+                // 도화선 불꽃 깜빡임 애니메이션 효과
+                ctx.fillStyle = b.timer % 10 < 5 ? '#ff9800' : '#ff5722';
+                ctx.fillRect(b.gx * TILE_SIZE + 18, b.gy * TILE_SIZE + 4, 5, 5);
+            });
+
+            // 3. 폭발 불길 효과 그리기
+            ctx.fillStyle = 'rgba(255, 87, 34, 0.85)';
+            explosions.forEach(e => {
+                ctx.fillRect(e.gx * TILE_SIZE, e.gy * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+            });
+
+            // 4. 플레이어 캐릭터 그리기
+            Object.values(players).forEach(p => {
+                if (!p.alive) return;
+                ctx.fillStyle = p.color;
+                ctx.fillRect(p.x, p.y, 24, 24);
+                
+                // 캐릭터 테두리 추가로 입체감 부여
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(p.x, p.y, 24, 24);
+            });
+        }
+
+        // 첫 초기 화면 그리기
+        draw();
+    </script>
+</body>
+</html>
